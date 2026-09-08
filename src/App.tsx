@@ -70,23 +70,58 @@ export default function App() {
     const frameBase64 = cameraRef.current.captureFrame();
     if (!frameBase64) return;
 
+    isScanningRef.current = true;
     setIsScanning(true);
     setErrorMessage(null);
     const startTime = performance.now();
+
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), 22000);
 
     try {
       const response = await fetch("/api/detect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image: frameBase64 }),
+        signal: abortController.signal,
       });
+      clearTimeout(timeoutId);
 
-      const data = await response.json();
+      const contentType = response.headers.get("content-type") || "";
+      let data: any = null;
+
+      if (contentType.includes("application/json")) {
+        try {
+          data = await response.json();
+        } catch {
+          data = null;
+        }
+      } else {
+        // Non-JSON response (e.g., HTML from proxy during reload or 502/504)
+        try {
+          await response.text();
+        } catch {
+          // ignore
+        }
+      }
+
       const elapsed = Math.round(performance.now() - startTime);
       setLatencyMs(elapsed);
 
-      if (!response.ok || data.error) {
-        throw new Error(data.error || "Không thể nhận diện hình ảnh");
+      if (!response.ok || !data || data.error) {
+        let errText = data?.error;
+        if (!errText) {
+          if (response.status === 429) {
+            errText = "Hệ thống AI đang tạm thời đạt giới hạn lượt gọi. Đang tự động thử lại...";
+          } else if (response.status === 502 || response.status === 504) {
+            errText = "Máy chủ AI phản hồi chậm hoặc đang bận. Đang tự động kết nối lại...";
+          } else if (response.status === 503) {
+            errText = "Dịch vụ AI đang bảo trì tạm thời. Vui lòng đợi trong giây lát...";
+          } else {
+            errText = "Máy chủ đang kết nối lại. Đang tự động thử lại...";
+          }
+        }
+        throw new Error(errText);
       }
 
       const objects: DetectedObject[] = data.objects || [];
@@ -119,8 +154,16 @@ export default function App() {
     } catch (err: any) {
       console.warn("Detection request error:", err);
       let msg = err.message || "Lỗi kết nối nhận diện";
-      if (typeof msg === "string") {
-        if (msg.includes("503") || msg.includes("high demand") || msg.includes("UNAVAILABLE")) {
+      if (err.name === "AbortError") {
+        msg = "Yêu cầu nhận diện quá thời gian chờ (timeout), đang tối ưu và thử lại...";
+      } else if (typeof msg === "string") {
+        if (
+          msg.includes("Unexpected token") ||
+          msg.includes("is not valid JSON") ||
+          msg.includes("JSON.parse")
+        ) {
+          msg = "Máy chủ đang khởi động hoặc đường truyền đang đồng bộ. Đang tự động kết nối lại...";
+        } else if (msg.includes("503") || msg.includes("high demand") || msg.includes("UNAVAILABLE")) {
           msg = "Máy chủ AI đang có lượng yêu cầu lớn, hệ thống đang tự động cân bằng và thử lại...";
         } else if (msg.includes("GEMINI_API_KEY")) {
           msg = "Chưa tìm thấy GEMINI_API_KEY. Vui lòng kiểm tra mục Settings > Secrets.";
@@ -130,6 +173,8 @@ export default function App() {
       }
       setErrorMessage(msg);
     } finally {
+      clearTimeout(timeoutId);
+      isScanningRef.current = false;
       setIsScanning(false);
     }
   }, []);
@@ -142,12 +187,12 @@ export default function App() {
     const getIntervalTime = (speed: ScanSpeed) => {
       switch (speed) {
         case "fast":
-          return 1600;
+          return 2200;
         case "battery_saver":
-          return 4200;
+          return 4500;
         case "normal":
         default:
-          return 2600;
+          return 3200;
       }
     };
 
@@ -164,8 +209,8 @@ export default function App() {
       }
     };
 
-    // Initial slight delay so camera has time to start
-    timeoutId = setTimeout(runLoop, 1200);
+    // Initial delay so camera has time to mount and stream
+    timeoutId = setTimeout(runLoop, 1500);
 
     return () => {
       isCancelled = true;

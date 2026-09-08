@@ -188,10 +188,13 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
             const video = videoRef.current;
             if (!video || video.readyState < 2) return null;
 
-            // Scale down slightly for ultra-fast Gemini transmission (max width 960px)
-            const scale = Math.min(1, 960 / (video.videoWidth || 960));
-            const w = Math.round((video.videoWidth || 640) * scale);
-            const h = Math.round((video.videoHeight || 480) * scale);
+            // Scale down to 800px max width for ultra-fast Gemini transmission and low latency
+            const maxDimension = 800;
+            const currentW = video.videoWidth || 640;
+            const currentH = video.videoHeight || 480;
+            const scale = Math.min(1, maxDimension / Math.max(currentW, currentH));
+            const w = Math.round(currentW * scale);
+            const h = Math.round(currentH * scale);
 
             canvas.width = w;
             canvas.height = h;
@@ -199,15 +202,18 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
             if (!ctx) return null;
 
             ctx.drawImage(video, 0, 0, w, h);
-            return canvas.toDataURL("image/jpeg", 0.85);
+            return canvas.toDataURL("image/jpeg", 0.8);
           } else {
             // Source is sample or uploaded image
             const img = document.getElementById("active-source-img") as HTMLImageElement;
             if (!img || !img.complete || img.naturalWidth === 0) return null;
 
-            const scale = Math.min(1, 960 / (img.naturalWidth || 960));
-            const w = Math.round((img.naturalWidth || 640) * scale);
-            const h = Math.round((img.naturalHeight || 480) * scale);
+            const maxDimension = 800;
+            const currentW = img.naturalWidth || 640;
+            const currentH = img.naturalHeight || 480;
+            const scale = Math.min(1, maxDimension / Math.max(currentW, currentH));
+            const w = Math.round(currentW * scale);
+            const h = Math.round(currentH * scale);
 
             canvas.width = w;
             canvas.height = h;
@@ -215,7 +221,7 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
             if (!ctx) return null;
 
             ctx.drawImage(img, 0, 0, w, h);
-            return canvas.toDataURL("image/jpeg", 0.85);
+            return canvas.toDataURL("image/jpeg", 0.8);
           }
         } catch (captureErr) {
           console.warn("Lỗi trích xuất khung hình từ canvas:", captureErr);

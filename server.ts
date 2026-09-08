@@ -229,11 +229,22 @@ Yêu cầu:
       });
     } catch (err: any) {
       console.error("Lỗi nhận diện đồ vật:", err);
-      return res.status(500).json({
-        error: err.message || "Lỗi xử lý hình ảnh nhận diện đồ vật",
+      const isRateLimit = String(err).includes("429") || String(err).includes("RESOURCE_EXHAUSTED");
+      return res.status(isRateLimit ? 429 : 500).json({
+        error: isRateLimit
+          ? "Hệ thống AI đang tạm thời đạt giới hạn tốc độ. Vui lòng đợi ít giây rồi thử lại."
+          : (err.message || "Lỗi xử lý hình ảnh nhận diện đồ vật"),
         details: String(err),
       });
     }
+  });
+
+  // Global API error middleware ensuring JSON response
+  app.use("/api", (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("API uncaught error:", err);
+    res.status(err.status || 500).json({
+      error: err.message || "Lỗi xử lý yêu cầu API",
+    });
   });
 
   // Vite middleware in dev or static files in production
