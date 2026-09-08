@@ -194,7 +194,31 @@ Yêu cầu:
         cleanedJson = cleanedJson.replace(/^```\s*/, "").replace(/```$/, "").trim();
       }
 
-      const resultData = JSON.parse(cleanedJson);
+      let resultData: any = {};
+      try {
+        resultData = JSON.parse(cleanedJson);
+      } catch (parseErr) {
+        // Fallback: extract substring between first { and last }
+        const jsonMatch = cleanedJson.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            resultData = JSON.parse(jsonMatch[0]);
+          } catch (nestedErr) {
+            console.warn("Lỗi phân tích cú pháp JSON phụ:", nestedErr);
+            resultData = {
+              dominantObject: "Không xác định",
+              sceneSummary: "Đã phân tích nhưng cấu trúc dữ liệu chưa chuẩn.",
+              objects: [],
+            };
+          }
+        } else {
+          resultData = {
+            dominantObject: "Không xác định",
+            sceneSummary: "Phản hồi văn bản từ AI: " + cleanedJson.slice(0, 100),
+            objects: [],
+          };
+        }
+      }
 
       return res.json({
         success: true,

@@ -11,6 +11,7 @@ import {
   AlertCircle,
   Wifi,
   Radio,
+  ExternalLink,
 } from "lucide-react";
 import { DetectedObject } from "../types";
 
@@ -70,9 +71,21 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [stream, setStream] = useState<MediaStream | null>(null);
     const [cameraError, setCameraError] = useState<string | null>(null);
-    const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
+    const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [resolution, setResolution] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
+    const handleVideoLoaded = () => {
+      if (videoRef.current) {
+        if (videoRef.current.videoWidth > 0) {
+          setResolution({
+            width: videoRef.current.videoWidth,
+            height: videoRef.current.videoHeight,
+          });
+        }
+        videoRef.current.play().catch(() => {});
+      }
+    };
 
     // Initialize or reinitialize webcam
     useEffect(() => {
@@ -95,14 +108,23 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
             stream.getTracks().forEach((track) => track.stop());
           }
 
-          const newStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: { ideal: facingMode },
-              width: { ideal: 1280, max: 1920 },
-              height: { ideal: 720, max: 1080 },
-            },
-            audio: false,
-          });
+          let newStream: MediaStream;
+          try {
+            newStream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: facingMode ? { ideal: facingMode } : undefined,
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              },
+              audio: false,
+            });
+          } catch (constraintErr) {
+            console.warn("Khởi tạo với ràng buộc độ phân giải không thành công, thử chế độ mặc định:", constraintErr);
+            newStream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: false,
+            });
+          }
 
           if (!mounted) {
             newStream.getTracks().forEach((track) => track.stop());
@@ -112,22 +134,15 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
           setStream(newStream);
           if (videoRef.current) {
             videoRef.current.srcObject = newStream;
-            videoRef.current.onloadedmetadata = () => {
-              if (videoRef.current) {
-                setResolution({
-                  width: videoRef.current.videoWidth,
-                  height: videoRef.current.videoHeight,
-                });
-                videoRef.current.play().catch(() => {});
-              }
-            };
+            videoRef.current.play().catch(() => {});
+            handleVideoLoaded();
           }
         } catch (err: any) {
           console.error("Camera access error:", err);
           if (mounted) {
             setCameraError(
               err.name === "NotAllowedError" || err.name === "PermissionDeniedError"
-                ? "Quyền truy cập webcam bị chặn hoặc chưa được cấp. Bạn có thể cấp quyền camera, mở tab mới, hoặc chuyển sang dùng Ảnh mẫu thử nghiệm ngay bên dưới."
+                ? "Quyền truy cập webcam bị từ chối hoặc bị hạn chế trong khung nhúng (iFrame). Bạn có thể thử mở ứng dụng trong Tab Mới hoặc dùng chế độ Ảnh Mẫu bên dưới."
                 : `Không thể kích hoạt webcam: ${err.message || "Thiết bị chưa sẵn sàng"}`
             );
           }
@@ -224,6 +239,8 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
             playsInline
             muted
             autoPlay
+            onLoadedMetadata={handleVideoLoaded}
+            onCanPlay={handleVideoLoaded}
             className={`w-full h-full object-cover ${facingMode === "user" ? "scale-x-[-1]" : ""}`}
           />
         )}
@@ -270,6 +287,16 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
                 <SwitchCamera className="w-4 h-4" /> Thử lại Webcam
               </button>
 
+              <a
+                id="btn-open-in-new-tab"
+                href={typeof window !== "undefined" ? window.location.href : "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl transition border border-slate-700 flex items-center gap-1.5"
+              >
+                <ExternalLink className="w-4 h-4" /> Mở trong Tab Mới
+              </a>
+
               {onUseSampleImage && (
                 <button
                   id="btn-use-sample-fallback"
@@ -295,11 +322,19 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
         <div className="absolute inset-0 pointer-events-none z-10">
           {detectedObjects.map((obj, index) => {
             const [ymin, xmin, ymax, xmax] = obj.box_2d;
+            const safeYmin = Math.min(ymin, ymax);
+            const safeYmax = Math.max(ymin, ymax);
+            const safeXmin = Math.min(xmin, xmax);
+            const safeXmax = Math.max(xmin, xmax);
+
             // Gemini coords are 0..1000
-            const top = (ymin / 1000) * 100;
-            const left = (xmin / 1000) * 100;
-            const width = ((xmax - xmin) / 1000) * 100;
-            const height = ((ymax - ymin) / 1000) * 100;
+            const top = (safeYmin / 1000) * 100;
+            const isMirrored = activeSource === "webcam" && facingMode === "user";
+            const left = isMirrored
+              ? ((1000 - safeXmax) / 1000) * 100
+              : (safeXmin / 1000) * 100;
+            const width = ((safeXmax - safeXmin) / 1000) * 100;
+            const height = ((safeYmax - safeYmin) / 1000) * 100;
 
             const isSelected = selectedObject?.nameVi === obj.nameVi;
             const colors = getColor(obj.category);

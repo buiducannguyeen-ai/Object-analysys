@@ -1,5 +1,5 @@
 import React from "react";
-import { Camera, Sparkles, Wifi, ShieldCheck, HelpCircle } from "lucide-react";
+import { Camera, Sparkles, Wifi, ShieldCheck, ExternalLink } from "lucide-react";
 
 interface HeaderProps {
   apiStatus: "connected" | "checking" | "error";
@@ -30,7 +30,7 @@ export const Header: React.FC<HeaderProps> = ({ apiStatus }) => {
           </div>
         </div>
 
-        {/* Status Indicators */}
+        {/* Status Indicators & Tab Opener */}
         <div className="flex items-center gap-2 sm:gap-3">
           <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-50 border border-slate-200 text-xs text-slate-600">
             <Wifi className="w-3.5 h-3.5 text-emerald-500" />
@@ -41,8 +41,20 @@ export const Header: React.FC<HeaderProps> = ({ apiStatus }) => {
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-50 border border-slate-200 text-xs text-slate-600">
             <ShieldCheck className="w-3.5 h-3.5 text-blue-500" />
             <span className="font-medium text-slate-700">Mô hình AI:</span>
-            <span className="font-semibold text-slate-900">Gemini 3.8 Flash</span>
+            <span className="font-semibold text-slate-900">Gemini 3.1 & 3.8</span>
           </div>
+
+          <a
+            id="header-open-tab-btn"
+            href={typeof window !== "undefined" ? window.location.href : "#"}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Mở toàn màn hình trong tab mới để cấp quyền Webcam tốt nhất"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium shadow-sm transition"
+          >
+            <ExternalLink className="w-3.5 h-3.5 text-blue-400" />
+            <span className="hidden xs:inline">Mở Tab Mới</span>
+          </a>
         </div>
       </div>
     </header>
