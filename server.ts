@@ -38,6 +38,29 @@ async function startServer() {
     });
   });
 
+  // Proxy image endpoint to prevent canvas CORS tainting on sample images
+  app.get("/api/proxy-image", async (req, res) => {
+    try {
+      const targetUrl = req.query.url as string;
+      if (!targetUrl || !targetUrl.startsWith("http")) {
+        return res.status(400).send("Invalid target URL");
+      }
+      const fetchRes = await fetch(targetUrl);
+      if (!fetchRes.ok) {
+        return res.status(fetchRes.status).send("Failed to fetch image");
+      }
+      const buffer = await fetchRes.arrayBuffer();
+      const contentType = fetchRes.headers.get("content-type") || "image/jpeg";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      return res.send(Buffer.from(buffer));
+    } catch (err: any) {
+      console.error("Proxy image error:", err);
+      return res.status(500).send("Proxy error");
+    }
+  });
+
   // Object detection endpoint
   app.post("/api/detect", async (req, res) => {
     try {
@@ -59,18 +82,7 @@ async function startServer() {
       const base64Data = image.replace(/^data:image\/[a-zA-Z0-9.+_-]+;base64,/, "");
 
       const ai = getAi();
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType,
-                data: base64Data,
-              },
-            },
-            {
-              text: `Bạn là hệ thống thị giác AI chuyên nhận diện đồ vật theo thời gian thực từ camera/webcam/video qua mạng wifi/internet.
+      const promptText = `Bạn là hệ thống thị giác AI chuyên nhận diện đồ vật theo thời gian thực từ camera/webcam/video qua mạng wifi/internet.
 Hãy phân tích hình ảnh và nhận diện tất cả các đồ vật, vật dụng, con người, thiết bị xuất hiện rõ trong khung hình.
 Yêu cầu:
 1. Nhận diện từ 1 đến 10 đồ vật rõ ràng nhất.
@@ -79,66 +91,110 @@ Yêu cầu:
 4. Phân loại (category) như: "Thiết bị điện tử", "Đồ gia dụng & Bếp", "Văn phòng phẩm", "Thời trang & Phụ kiện", "Đồ uống & Thực phẩm", "Nội thất", "Người & Cá nhân", "Khác".
 5. Bounding box (box_2d) theo chuẩn [ymin, xmin, ymax, xmax] trong thang đo 0 đến 1000 tương ứng với vị trí đồ vật trong ảnh.
 6. sceneSummary: Tóm tắt 1 câu ngắn gọn bối cảnh (ví dụ: "Bàn làm việc với máy tính xách tay và cốc nước").
-7. dominantObject: Tên đồ vật nổi bật và lớn nhất ở trọng tâm khung hình.`,
-            },
-          ],
-        },
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              dominantObject: {
-                type: Type.STRING,
-                description: "Tên đồ vật nổi bật nhất bằng tiếng Việt",
-              },
-              sceneSummary: {
-                type: Type.STRING,
-                description: "Tóm tắt khung cảnh ngắn gọn bằng tiếng Việt",
-              },
-              objects: {
-                type: Type.ARRAY,
-                description: "Danh sách các đồ vật nhận diện được",
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    nameVi: {
-                      type: Type.STRING,
-                      description: "Tên đồ vật bằng tiếng Việt",
-                    },
-                    nameEn: {
-                      type: Type.STRING,
-                      description: "Tên tiếng Anh",
-                    },
-                    category: {
-                      type: Type.STRING,
-                      description: "Danh mục phân loại bằng tiếng Việt",
-                    },
-                    confidence: {
-                      type: Type.NUMBER,
-                      description: "Độ tin cậy từ 0.70 đến 0.99",
-                    },
-                    description: {
-                      type: Type.STRING,
-                      description: "Mô tả ngắn về vị trí hoặc màu sắc",
-                    },
-                    box_2d: {
-                      type: Type.ARRAY,
-                      description: "[ymin, xmin, ymax, xmax] từ 0 đến 1000",
-                      items: { type: Type.INTEGER },
-                    },
-                  },
-                  required: ["nameVi", "nameEn", "category", "confidence", "box_2d"],
+7. dominantObject: Tên đồ vật nổi bật và lớn nhất ở trọng tâm khung hình.`;
+
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          dominantObject: {
+            type: Type.STRING,
+            description: "Tên đồ vật nổi bật nhất bằng tiếng Việt",
+          },
+          sceneSummary: {
+            type: Type.STRING,
+            description: "Tóm tắt khung cảnh ngắn gọn bằng tiếng Việt",
+          },
+          objects: {
+            type: Type.ARRAY,
+            description: "Danh sách các đồ vật nhận diện được",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                nameVi: {
+                  type: Type.STRING,
+                  description: "Tên đồ vật bằng tiếng Việt",
+                },
+                nameEn: {
+                  type: Type.STRING,
+                  description: "Tên tiếng Anh",
+                },
+                category: {
+                  type: Type.STRING,
+                  description: "Danh mục phân loại bằng tiếng Việt",
+                },
+                confidence: {
+                  type: Type.NUMBER,
+                  description: "Độ tin cậy từ 0.70 đến 0.99",
+                },
+                description: {
+                  type: Type.STRING,
+                  description: "Mô tả ngắn về vị trí hoặc màu sắc",
+                },
+                box_2d: {
+                  type: Type.ARRAY,
+                  description: "[ymin, xmin, ymax, xmax] từ 0 đến 1000",
+                  items: { type: Type.INTEGER },
                 },
               },
+              required: ["nameVi", "nameEn", "category", "confidence", "box_2d"],
             },
-            required: ["dominantObject", "sceneSummary", "objects"],
           },
         },
-      });
+        required: ["dominantObject", "sceneSummary", "objects"],
+      };
 
-      const responseText = response.text || "{}";
-      const resultData = JSON.parse(responseText);
+      // Priority list of models with fallback in case of high load
+      const candidateModels = ["gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.8-flash"];
+      let lastError: any = null;
+      let responseText = "";
+
+      for (const modelName of candidateModels) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType,
+                    data: base64Data,
+                  },
+                },
+                {
+                  text: promptText,
+                },
+              ],
+            },
+            config: {
+              responseMimeType: "application/json",
+              responseSchema,
+            },
+          });
+
+          if (response.text) {
+            responseText = response.text;
+            break;
+          }
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`Model ${modelName} gặp sự cố:`, err?.message || err);
+          // Try next model
+        }
+      }
+
+      if (!responseText) {
+        throw lastError || new Error("Không nhận được phản hồi từ mô hình AI.");
+      }
+
+      // Clean markdown fences if any
+      let cleanedJson = responseText.trim();
+      if (cleanedJson.startsWith("```json")) {
+        cleanedJson = cleanedJson.replace(/^```json\s*/, "").replace(/```$/, "").trim();
+      } else if (cleanedJson.startsWith("```")) {
+        cleanedJson = cleanedJson.replace(/^```\s*/, "").replace(/```$/, "").trim();
+      }
+
+      const resultData = JSON.parse(cleanedJson);
 
       return res.json({
         success: true,

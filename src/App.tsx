@@ -118,7 +118,17 @@ export default function App() {
       }
     } catch (err: any) {
       console.warn("Detection request error:", err);
-      setErrorMessage(err.message || "Lỗi kết nối nhận diện");
+      let msg = err.message || "Lỗi kết nối nhận diện";
+      if (typeof msg === "string") {
+        if (msg.includes("503") || msg.includes("high demand") || msg.includes("UNAVAILABLE")) {
+          msg = "Máy chủ AI đang có lượng yêu cầu lớn, hệ thống đang tự động cân bằng và thử lại...";
+        } else if (msg.includes("GEMINI_API_KEY")) {
+          msg = "Chưa tìm thấy GEMINI_API_KEY. Vui lòng kiểm tra mục Settings > Secrets.";
+        } else if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
+          msg = "Đường truyền Wifi/Internet gián đoạn. Vui lòng kiểm tra kết nối mạng.";
+        }
+      }
+      setErrorMessage(msg);
     } finally {
       setIsScanning(false);
     }
@@ -251,6 +261,7 @@ export default function App() {
               sampleImageUrl={sampleImageUrl}
               uploadedImageUrl={uploadedImageUrl}
               onSwitchToWebcam={handleSwitchToWebcam}
+              onUseSampleImage={() => handleSelectSample(SAMPLE_IMAGES[0])}
               dominantObject={dominantObject}
             />
 

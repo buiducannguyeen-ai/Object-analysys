@@ -27,6 +27,7 @@ interface CameraViewProps {
   sampleImageUrl?: string;
   uploadedImageUrl?: string;
   onSwitchToWebcam: () => void;
+  onUseSampleImage?: () => void;
   dominantObject?: string;
 }
 
@@ -59,6 +60,7 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
       sampleImageUrl,
       uploadedImageUrl,
       onSwitchToWebcam,
+      onUseSampleImage,
       dominantObject,
     },
     ref
@@ -125,8 +127,8 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
           if (mounted) {
             setCameraError(
               err.name === "NotAllowedError" || err.name === "PermissionDeniedError"
-                ? "Quyền truy cập camera bị từ chối. Vui lòng cấp quyền cho trang web hoặc thử chế độ ảnh mẫu."
-                : `Không thể kích hoạt webcam: ${err.message || "Lỗi thiết bị"}`
+                ? "Quyền truy cập webcam bị chặn hoặc chưa được cấp. Bạn có thể cấp quyền camera, mở tab mới, hoặc chuyển sang dùng Ảnh mẫu thử nghiệm ngay bên dưới."
+                : `Không thể kích hoạt webcam: ${err.message || "Thiết bị chưa sẵn sàng"}`
             );
           }
         }
@@ -163,41 +165,46 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
     // Capture current frame from video or image
     useImperativeHandle(ref, () => ({
       captureFrame: () => {
-        const canvas = canvasRef.current;
-        if (!canvas) return null;
+        try {
+          const canvas = canvasRef.current;
+          if (!canvas) return null;
 
-        if (activeSource === "webcam") {
-          const video = videoRef.current;
-          if (!video || video.readyState < 2) return null;
+          if (activeSource === "webcam") {
+            const video = videoRef.current;
+            if (!video || video.readyState < 2) return null;
 
-          // Scale down slightly for ultra-fast Gemini transmission (max width 960px)
-          const scale = Math.min(1, 960 / (video.videoWidth || 960));
-          const w = Math.round((video.videoWidth || 640) * scale);
-          const h = Math.round((video.videoHeight || 480) * scale);
+            // Scale down slightly for ultra-fast Gemini transmission (max width 960px)
+            const scale = Math.min(1, 960 / (video.videoWidth || 960));
+            const w = Math.round((video.videoWidth || 640) * scale);
+            const h = Math.round((video.videoHeight || 480) * scale);
 
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) return null;
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return null;
 
-          ctx.drawImage(video, 0, 0, w, h);
-          return canvas.toDataURL("image/jpeg", 0.85);
-        } else {
-          // Source is sample or uploaded image
-          const img = document.getElementById("active-source-img") as HTMLImageElement;
-          if (!img || !img.complete) return null;
+            ctx.drawImage(video, 0, 0, w, h);
+            return canvas.toDataURL("image/jpeg", 0.85);
+          } else {
+            // Source is sample or uploaded image
+            const img = document.getElementById("active-source-img") as HTMLImageElement;
+            if (!img || !img.complete || img.naturalWidth === 0) return null;
 
-          const scale = Math.min(1, 960 / (img.naturalWidth || 960));
-          const w = Math.round((img.naturalWidth || 640) * scale);
-          const h = Math.round((img.naturalHeight || 480) * scale);
+            const scale = Math.min(1, 960 / (img.naturalWidth || 960));
+            const w = Math.round((img.naturalWidth || 640) * scale);
+            const h = Math.round((img.naturalHeight || 480) * scale);
 
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) return null;
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return null;
 
-          ctx.drawImage(img, 0, 0, w, h);
-          return canvas.toDataURL("image/jpeg", 0.85);
+            ctx.drawImage(img, 0, 0, w, h);
+            return canvas.toDataURL("image/jpeg", 0.85);
+          }
+        } catch (captureErr) {
+          console.warn("Lỗi trích xuất khung hình từ canvas:", captureErr);
+          return null;
         }
       },
     }));
@@ -243,25 +250,35 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
 
         {/* Camera Error Message */}
         {activeSource === "webcam" && cameraError && (
-          <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center p-6 text-center z-20">
-            <div className="w-16 h-16 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mb-4 border border-rose-500/20">
-              <CameraOff className="w-8 h-8" />
+          <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-6 text-center z-20">
+            <div className="w-14 h-14 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mb-3 border border-rose-500/20">
+              <CameraOff className="w-7 h-7" />
             </div>
-            <h3 className="text-lg font-semibold text-white mb-2">Chưa thể bật Webcam</h3>
-            <p className="text-sm text-slate-300 max-w-md mb-6 leading-relaxed">
+            <h3 className="text-base font-semibold text-white mb-1.5">Chưa thể kết nối Webcam</h3>
+            <p className="text-xs text-slate-300 max-w-md mb-5 leading-relaxed">
               {cameraError}
             </p>
-            <div className="flex flex-wrap items-center justify-center gap-3">
+            <div className="flex flex-wrap items-center justify-center gap-2.5">
               <button
                 id="btn-retry-camera"
                 onClick={() => {
                   setCameraError(null);
                   setFacingMode((m) => (m === "user" ? "environment" : "user"));
                 }}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition shadow flex items-center gap-2"
+                className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-xl transition shadow flex items-center gap-1.5"
               >
-                <SwitchCamera className="w-4 h-4" /> Đổi camera / Thử lại
+                <SwitchCamera className="w-4 h-4" /> Thử lại Webcam
               </button>
+
+              {onUseSampleImage && (
+                <button
+                  id="btn-use-sample-fallback"
+                  onClick={onUseSampleImage}
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-xl transition shadow flex items-center gap-1.5"
+                >
+                  <Sparkles className="w-4 h-4" /> Dùng Ảnh Mẫu Thử Nghiệm
+                </button>
+              )}
             </div>
           </div>
         )}
