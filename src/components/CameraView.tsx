@@ -1,0 +1,411 @@
+import React, { useRef, useEffect, useState, forwardRef, useImperativeHandle } from "react";
+import {
+  Camera,
+  CameraOff,
+  SwitchCamera,
+  Maximize2,
+  Minimize2,
+  Scan,
+  Sparkles,
+  Image as ImageIcon,
+  AlertCircle,
+  Wifi,
+  Radio,
+} from "lucide-react";
+import { DetectedObject } from "../types";
+
+export interface CameraViewHandle {
+  captureFrame: () => string | null;
+}
+
+interface CameraViewProps {
+  detectedObjects: DetectedObject[];
+  selectedObject: DetectedObject | null;
+  onSelectObject: (obj: DetectedObject | null) => void;
+  isScanning: boolean;
+  activeSource: "webcam" | "sample" | "upload";
+  sampleImageUrl?: string;
+  uploadedImageUrl?: string;
+  onSwitchToWebcam: () => void;
+  dominantObject?: string;
+}
+
+const CATEGORY_COLORS: Record<string, { border: string; bg: string; text: string }> = {
+  "Thiết bị điện tử": { border: "border-sky-500", bg: "bg-sky-500/15", text: "text-sky-300" },
+  "Đồ gia dụng & Bếp": { border: "border-amber-500", bg: "bg-amber-500/15", text: "text-amber-300" },
+  "Văn phòng phẩm": { border: "border-emerald-500", bg: "bg-emerald-500/15", text: "text-emerald-300" },
+  "Thời trang & Phụ kiện": { border: "border-purple-500", bg: "bg-purple-500/15", text: "text-purple-300" },
+  "Đồ uống & Thực phẩm": { border: "border-rose-500", bg: "bg-rose-500/15", text: "text-rose-300" },
+  "Nội thất": { border: "border-orange-500", bg: "bg-orange-500/15", text: "text-orange-300" },
+  "Người & Cá nhân": { border: "border-teal-500", bg: "bg-teal-500/15", text: "text-teal-300" },
+};
+
+function getColor(category: string) {
+  return CATEGORY_COLORS[category] || {
+    border: "border-blue-500",
+    bg: "bg-blue-500/15",
+    text: "text-blue-300",
+  };
+}
+
+export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
+  (
+    {
+      detectedObjects,
+      selectedObject,
+      onSelectObject,
+      isScanning,
+      activeSource,
+      sampleImageUrl,
+      uploadedImageUrl,
+      onSwitchToWebcam,
+      dominantObject,
+    },
+    ref
+  ) => {
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const [stream, setStream] = useState<MediaStream | null>(null);
+    const [cameraError, setCameraError] = useState<string | null>(null);
+    const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [resolution, setResolution] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
+    // Initialize or reinitialize webcam
+    useEffect(() => {
+      if (activeSource !== "webcam") {
+        stopWebcam();
+        return;
+      }
+
+      let mounted = true;
+
+      async function startCamera() {
+        setCameraError(null);
+        try {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error("Trình duyệt không hỗ trợ WebRTC / getUserMedia API.");
+          }
+
+          // Stop previous stream if running
+          if (stream) {
+            stream.getTracks().forEach((track) => track.stop());
+          }
+
+          const newStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: facingMode },
+              width: { ideal: 1280, max: 1920 },
+              height: { ideal: 720, max: 1080 },
+            },
+            audio: false,
+          });
+
+          if (!mounted) {
+            newStream.getTracks().forEach((track) => track.stop());
+            return;
+          }
+
+          setStream(newStream);
+          if (videoRef.current) {
+            videoRef.current.srcObject = newStream;
+            videoRef.current.onloadedmetadata = () => {
+              if (videoRef.current) {
+                setResolution({
+                  width: videoRef.current.videoWidth,
+                  height: videoRef.current.videoHeight,
+                });
+                videoRef.current.play().catch(() => {});
+              }
+            };
+          }
+        } catch (err: any) {
+          console.error("Camera access error:", err);
+          if (mounted) {
+            setCameraError(
+              err.name === "NotAllowedError" || err.name === "PermissionDeniedError"
+                ? "Quyền truy cập camera bị từ chối. Vui lòng cấp quyền cho trang web hoặc thử chế độ ảnh mẫu."
+                : `Không thể kích hoạt webcam: ${err.message || "Lỗi thiết bị"}`
+            );
+          }
+        }
+      }
+
+      startCamera();
+
+      return () => {
+        mounted = false;
+        stopWebcam();
+      };
+    }, [activeSource, facingMode]);
+
+    const stopWebcam = () => {
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        setStream(null);
+      }
+    };
+
+    const toggleFacingMode = () => {
+      setFacingMode((prev) => (prev === "environment" ? "user" : "environment"));
+    };
+
+    const toggleFullscreen = () => {
+      if (!containerRef.current) return;
+      if (!document.fullscreenElement) {
+        containerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+      } else {
+        document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+      }
+    };
+
+    // Capture current frame from video or image
+    useImperativeHandle(ref, () => ({
+      captureFrame: () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return null;
+
+        if (activeSource === "webcam") {
+          const video = videoRef.current;
+          if (!video || video.readyState < 2) return null;
+
+          // Scale down slightly for ultra-fast Gemini transmission (max width 960px)
+          const scale = Math.min(1, 960 / (video.videoWidth || 960));
+          const w = Math.round((video.videoWidth || 640) * scale);
+          const h = Math.round((video.videoHeight || 480) * scale);
+
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return null;
+
+          ctx.drawImage(video, 0, 0, w, h);
+          return canvas.toDataURL("image/jpeg", 0.85);
+        } else {
+          // Source is sample or uploaded image
+          const img = document.getElementById("active-source-img") as HTMLImageElement;
+          if (!img || !img.complete) return null;
+
+          const scale = Math.min(1, 960 / (img.naturalWidth || 960));
+          const w = Math.round((img.naturalWidth || 640) * scale);
+          const h = Math.round((img.naturalHeight || 480) * scale);
+
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return null;
+
+          ctx.drawImage(img, 0, 0, w, h);
+          return canvas.toDataURL("image/jpeg", 0.85);
+        }
+      },
+    }));
+
+    return (
+      <div
+        ref={containerRef}
+        className="relative bg-slate-950 rounded-2xl overflow-hidden shadow-2xl border border-slate-800 aspect-video w-full flex items-center justify-center group"
+      >
+        {/* Hidden processing canvas */}
+        <canvas ref={canvasRef} className="hidden" />
+
+        {/* Live Video Feed */}
+        {activeSource === "webcam" && (
+          <video
+            ref={videoRef}
+            playsInline
+            muted
+            autoPlay
+            className={`w-full h-full object-cover ${facingMode === "user" ? "scale-x-[-1]" : ""}`}
+          />
+        )}
+
+        {/* Static Image / Upload Feed */}
+        {activeSource === "sample" && sampleImageUrl && (
+          <img
+            id="active-source-img"
+            crossOrigin="anonymous"
+            src={sampleImageUrl}
+            alt="Sample Scene"
+            className="w-full h-full object-cover"
+          />
+        )}
+
+        {activeSource === "upload" && uploadedImageUrl && (
+          <img
+            id="active-source-img"
+            src={uploadedImageUrl}
+            alt="Uploaded Source"
+            className="w-full h-full object-cover"
+          />
+        )}
+
+        {/* Camera Error Message */}
+        {activeSource === "webcam" && cameraError && (
+          <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center p-6 text-center z-20">
+            <div className="w-16 h-16 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mb-4 border border-rose-500/20">
+              <CameraOff className="w-8 h-8" />
+            </div>
+            <h3 className="text-lg font-semibold text-white mb-2">Chưa thể bật Webcam</h3>
+            <p className="text-sm text-slate-300 max-w-md mb-6 leading-relaxed">
+              {cameraError}
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                id="btn-retry-camera"
+                onClick={() => {
+                  setCameraError(null);
+                  setFacingMode((m) => (m === "user" ? "environment" : "user"));
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition shadow flex items-center gap-2"
+              >
+                <SwitchCamera className="w-4 h-4" /> Đổi camera / Thử lại
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Scanning Laser Line Effect */}
+        {isScanning && (
+          <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden">
+            <div className="w-full h-1 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_15px_#38bdf8] animate-pulse absolute top-0 left-0 right-0 animate-bounce duration-1000" />
+            <div className="absolute inset-0 bg-cyan-500/5 animate-pulse" />
+          </div>
+        )}
+
+        {/* Bounding Boxes Overlay */}
+        <div className="absolute inset-0 pointer-events-none z-10">
+          {detectedObjects.map((obj, index) => {
+            const [ymin, xmin, ymax, xmax] = obj.box_2d;
+            // Gemini coords are 0..1000
+            const top = (ymin / 1000) * 100;
+            const left = (xmin / 1000) * 100;
+            const width = ((xmax - xmin) / 1000) * 100;
+            const height = ((ymax - ymin) / 1000) * 100;
+
+            const isSelected = selectedObject?.nameVi === obj.nameVi;
+            const colors = getColor(obj.category);
+
+            return (
+              <div
+                key={`${obj.nameVi}-${index}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectObject(isSelected ? null : obj);
+                }}
+                style={{
+                  top: `${Math.max(0, Math.min(100, top))}%`,
+                  left: `${Math.max(0, Math.min(100, left))}%`,
+                  width: `${Math.max(2, Math.min(100, width))}%`,
+                  height: `${Math.max(2, Math.min(100, height))}%`,
+                }}
+                className={`absolute pointer-events-auto cursor-pointer transition-all duration-300 rounded-md border-2 ${
+                  isSelected
+                    ? "border-yellow-400 bg-yellow-400/25 ring-2 ring-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.5)] z-20"
+                    : `${colors.border} ${colors.bg} hover:border-white hover:bg-white/10`
+                }`}
+              >
+                {/* Tag label badge */}
+                <div
+                  className={`absolute -top-7 left-0 px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap shadow-lg flex items-center gap-1.5 backdrop-blur-md ${
+                    isSelected
+                      ? "bg-yellow-500 text-slate-950"
+                      : "bg-slate-900/90 text-white border border-slate-700"
+                  }`}
+                >
+                  <span className="font-bold">{obj.nameVi}</span>
+                  <span className="text-[10px] opacity-80">
+                    {Math.round(obj.confidence * 100)}%
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Top HUD: Status Bar */}
+        <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-20 pointer-events-none">
+          {/* Left indicators */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/80 backdrop-blur-md border border-slate-700/60 text-xs text-white shadow-lg pointer-events-auto">
+              {activeSource === "webcam" ? (
+                <>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span className="font-medium text-emerald-400">Webcam trực tiếp</span>
+                </>
+              ) : activeSource === "sample" ? (
+                <>
+                  <ImageIcon className="w-3.5 h-3.5 text-blue-400" />
+                  <span className="font-medium text-blue-300">Ảnh mẫu thử nghiệm</span>
+                </>
+              ) : (
+                <>
+                  <ImageIcon className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="font-medium text-purple-300">Ảnh tải lên</span>
+                </>
+              )}
+            </div>
+
+            {/* Public Wifi / AI Connection status */}
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/80 backdrop-blur-md border border-slate-700/60 text-xs text-slate-300 shadow-lg pointer-events-auto">
+              <Wifi className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Wifi / Gemini AI</span>
+            </div>
+          </div>
+
+          {/* Right controls */}
+          <div className="flex items-center gap-2 pointer-events-auto">
+            {activeSource !== "webcam" && (
+              <button
+                id="btn-return-webcam"
+                onClick={onSwitchToWebcam}
+                className="px-2.5 py-1 rounded-lg bg-slate-900/80 hover:bg-slate-800 text-xs text-slate-200 border border-slate-700/60 transition backdrop-blur-md flex items-center gap-1 shadow"
+              >
+                <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Bật lại Webcam</span>
+              </button>
+            )}
+
+            {activeSource === "webcam" && (
+              <button
+                id="btn-switch-camera"
+                onClick={toggleFacingMode}
+                title="Đổi camera trước/sau"
+                className="p-2 rounded-lg bg-slate-900/80 hover:bg-slate-800 text-slate-200 border border-slate-700/60 transition backdrop-blur-md shadow"
+              >
+                <SwitchCamera className="w-4 h-4" />
+              </button>
+            )}
+
+            <button
+              id="btn-toggle-fullscreen"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "Thu nhỏ" : "Toàn màn hình"}
+              className="p-2 rounded-lg bg-slate-900/80 hover:bg-slate-800 text-slate-200 border border-slate-700/60 transition backdrop-blur-md shadow"
+            >
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Bottom Prominent Object Banner */}
+        {dominantObject && dominantObject !== "Không xác định" && (
+          <div className="absolute bottom-3 left-3 right-3 z-20 pointer-events-none flex justify-center">
+            <div className="px-4 py-1.5 rounded-full bg-slate-950/85 backdrop-blur-md border border-slate-700/80 text-white shadow-xl flex items-center gap-2 pointer-events-auto animate-fade-in">
+              <Sparkles className="w-4 h-4 text-yellow-400 shrink-0" />
+              <span className="text-xs text-slate-400">Đang nhìn thấy:</span>
+              <span className="text-sm font-bold text-amber-300">{dominantObject}</span>
+              <span className="text-[11px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full">
+                {detectedObjects.length} đồ vật
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+);
