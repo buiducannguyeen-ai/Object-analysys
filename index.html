@@ -2,8 +2,56 @@
 <html lang="en">
   <head>
     <script>
-      // Suppress expected benign Vite WebSocket HMR notices in AI Studio preview environment
+      // Gracefully handle Vite WebSocket HMR in AI Studio sandbox environment
       (function () {
+        if (typeof window !== 'undefined' && window.WebSocket) {
+          const OriginalWebSocket = window.WebSocket;
+          function MockViteWebSocket(url, protocols) {
+            const isVite =
+              (typeof protocols === 'string' && protocols.includes('vite')) ||
+              (Array.isArray(protocols) && protocols.some(function (p) { return typeof p === 'string' && p.includes('vite'); })) ||
+              (typeof url === 'string' && (url.includes('token=') || url.includes('vite')));
+
+            if (isVite) {
+              const target = new EventTarget();
+              target.CONNECTING = 0;
+              target.OPEN = 1;
+              target.CLOSING = 2;
+              target.CLOSED = 3;
+              target.readyState = 1; // OPEN immediately so Vite never enters reject state
+              target.url = url;
+              target.protocol = Array.isArray(protocols) ? protocols[0] : (protocols || '');
+              target.bufferedAmount = 0;
+              target.extensions = '';
+              target.binaryType = 'blob';
+              target.send = function () {};
+              target.close = function () {
+                target.readyState = 3;
+                const ev = new Event('close');
+                target.dispatchEvent(ev);
+                if (typeof target.onclose === 'function') target.onclose(ev);
+              };
+              setTimeout(function () {
+                if (target.readyState === 1) {
+                  const ev = new Event('open');
+                  target.dispatchEvent(ev);
+                  if (typeof target.onopen === 'function') target.onopen(ev);
+                }
+              }, 0);
+              return target;
+            }
+            return new OriginalWebSocket(url, protocols);
+          }
+
+          MockViteWebSocket.prototype = OriginalWebSocket.prototype;
+          MockViteWebSocket.CONNECTING = 0;
+          MockViteWebSocket.OPEN = 1;
+          MockViteWebSocket.CLOSING = 2;
+          MockViteWebSocket.CLOSED = 3;
+
+          window.WebSocket = MockViteWebSocket;
+        }
+
         window.addEventListener('unhandledrejection', function (event) {
           if (
             event &&
