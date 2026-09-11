@@ -113,12 +113,16 @@ export default function App() {
         if (!errText) {
           if (response.status === 429) {
             errText = "Hệ thống AI đang tạm thời đạt giới hạn lượt gọi. Đang tự động thử lại...";
+          } else if (response.status === 404) {
+            errText = "Không tìm thấy dịch vụ nhận diện /api/detect trên máy chủ (404). Hãy kiểm tra file api/detect.ts hoặc thiết lập Serverless Function.";
+          } else if (response.status === 401 || response.status === 403) {
+            errText = "Khóa GEMINI_API_KEY chưa hợp lệ hoặc chưa được cấu hình trên máy chủ.";
           } else if (response.status === 502 || response.status === 504) {
             errText = "Máy chủ AI phản hồi chậm hoặc đang bận. Đang tự động kết nối lại...";
           } else if (response.status === 503) {
             errText = "Dịch vụ AI đang bảo trì tạm thời. Vui lòng đợi trong giây lát...";
           } else {
-            errText = "Máy chủ đang kết nối lại. Đang tự động thử lại...";
+            errText = `Máy chủ phản hồi mã ${response.status}. Đang tự động thử lại...`;
           }
         }
         throw new Error(errText);

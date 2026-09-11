@@ -9,9 +9,11 @@ import {
   Sparkles,
   Image as ImageIcon,
   AlertCircle,
+  AlertTriangle,
   Wifi,
   Radio,
   ExternalLink,
+  RefreshCw,
 } from "lucide-react";
 import { DetectedObject } from "../types";
 
@@ -72,6 +74,10 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
     const [stream, setStream] = useState<MediaStream | null>(null);
     const [cameraError, setCameraError] = useState<string | null>(null);
     const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
+    const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
+    const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+    const [isTrackMuted, setIsTrackMuted] = useState(false);
+    const [isFramePitchBlack, setIsFramePitchBlack] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [resolution, setResolution] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
@@ -87,6 +93,22 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
       }
     };
 
+    // Enumerate camera devices
+    useEffect(() => {
+      async function enumerateCameras() {
+        try {
+          if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+            const allDevices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevs = allDevices.filter((d) => d.kind === "videoinput");
+            setAvailableDevices(videoDevs);
+          }
+        } catch (e) {
+          console.warn("Lỗi đọc danh sách camera:", e);
+        }
+      }
+      enumerateCameras();
+    }, [stream]);
+
     // Initialize or reinitialize webcam
     useEffect(() => {
       if (activeSource !== "webcam") {
@@ -98,6 +120,8 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
 
       async function startCamera() {
         setCameraError(null);
+        setIsTrackMuted(false);
+        setIsFramePitchBlack(false);
         try {
           if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error("Trình duyệt không hỗ trợ WebRTC / getUserMedia API.");
@@ -110,18 +134,21 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
 
           let newStream: MediaStream;
           try {
-            newStream = await navigator.mediaDevices.getUserMedia({
-              video: {
-                facingMode: facingMode ? { ideal: facingMode } : undefined,
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-              },
+            const constraints: MediaStreamConstraints = {
+              video: selectedDeviceId
+                ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+                : {
+                    facingMode: facingMode ? { ideal: facingMode } : undefined,
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                  },
               audio: false,
-            });
+            };
+            newStream = await navigator.mediaDevices.getUserMedia(constraints);
           } catch (constraintErr) {
-            console.warn("Khởi tạo với ràng buộc độ phân giải không thành công, thử chế độ mặc định:", constraintErr);
+            console.warn("Khởi tạo với ràng buộc không thành công, thử chế độ mặc định:", constraintErr);
             newStream = await navigator.mediaDevices.getUserMedia({
-              video: true,
+              video: selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : true,
               audio: false,
             });
           }
@@ -129,6 +156,22 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
           if (!mounted) {
             newStream.getTracks().forEach((track) => track.stop());
             return;
+          }
+
+          const track = newStream.getVideoTracks()[0];
+          if (track) {
+            if (track.muted) {
+              setIsTrackMuted(true);
+            }
+            track.onmute = () => {
+              console.warn("Camera track bị tắt hoặc chuyển sang muted");
+              setIsTrackMuted(true);
+            };
+            track.onunmute = () => {
+              console.info("Camera track đã hoạt động trở lại");
+              setIsTrackMuted(false);
+              setIsFramePitchBlack(false);
+            };
           }
 
           setStream(newStream);
@@ -142,7 +185,7 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
           if (mounted) {
             setCameraError(
               err.name === "NotAllowedError" || err.name === "PermissionDeniedError"
-                ? "Quyền truy cập webcam bị từ chối hoặc bị hạn chế trong khung nhúng (iFrame). Bạn có thể thử mở ứng dụng trong Tab Mới hoặc dùng chế độ Ảnh Mẫu bên dưới."
+                ? "Quyền truy cập webcam bị từ chối hoặc bị hạn chế trong trình duyệt. Bạn có thể thử mở ứng dụng trong Tab Mới hoặc dùng chế độ Ảnh Mẫu bên dưới."
                 : `Không thể kích hoạt webcam: ${err.message || "Thiết bị chưa sẵn sàng"}`
             );
           }
@@ -155,7 +198,7 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
         mounted = false;
         stopWebcam();
       };
-    }, [activeSource, facingMode]);
+    }, [activeSource, facingMode, selectedDeviceId]);
 
     const stopWebcam = () => {
       if (stream) {
@@ -165,7 +208,14 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
     };
 
     const toggleFacingMode = () => {
-      setFacingMode((prev) => (prev === "environment" ? "user" : "environment"));
+      if (availableDevices.length > 1) {
+        // Cycle device
+        const currentIndex = availableDevices.findIndex((d) => d.deviceId === selectedDeviceId);
+        const nextIndex = (currentIndex + 1) % availableDevices.length;
+        setSelectedDeviceId(availableDevices[nextIndex]?.deviceId || "");
+      } else {
+        setFacingMode((prev) => (prev === "environment" ? "user" : "environment"));
+      }
     };
 
     const toggleFullscreen = () => {
@@ -202,6 +252,26 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
             if (!ctx) return null;
 
             ctx.drawImage(video, 0, 0, w, h);
+
+            // Light sample check: detect pitch-black frames (e.g. camera shutter closed or blocked)
+            try {
+              const sampleW = Math.min(24, w);
+              const sampleH = Math.min(24, h);
+              const sample = ctx.getImageData(Math.floor(w / 2) - 12, Math.floor(h / 2) - 12, sampleW, sampleH);
+              let totalBrightness = 0;
+              for (let i = 0; i < sample.data.length; i += 4) {
+                totalBrightness += sample.data[i] + sample.data[i + 1] + sample.data[i + 2];
+              }
+              const avg = totalBrightness / ((sample.data.length / 4) * 3);
+              if (avg < 2.5) {
+                setIsFramePitchBlack(true);
+              } else {
+                setIsFramePitchBlack(false);
+              }
+            } catch {
+              // ignore
+            }
+
             return canvas.toDataURL("image/jpeg", 0.8);
           } else {
             // Source is sample or uploaded image
@@ -229,6 +299,8 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
         }
       },
     }));
+
+    const showCameraBlockedNotice = activeSource === "webcam" && (isTrackMuted || isFramePitchBlack);
 
     return (
       <div
@@ -286,6 +358,7 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
                 id="btn-retry-camera"
                 onClick={() => {
                   setCameraError(null);
+                  setSelectedDeviceId("");
                   setFacingMode((m) => (m === "user" ? "environment" : "user"));
                 }}
                 className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-xl transition shadow flex items-center gap-1.5"
@@ -312,6 +385,77 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
                   <Sparkles className="w-4 h-4" /> Dùng Ảnh Mẫu Thử Nghiệm
                 </button>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Camera Muted / Hardware Privacy Shutter Guidance Notice */}
+        {showCameraBlockedNotice && !cameraError && (
+          <div className="absolute inset-x-3 md:inset-x-8 top-14 md:top-16 z-30 p-4 md:p-5 rounded-2xl bg-slate-900/95 border border-amber-500/50 backdrop-blur-xl shadow-2xl text-left">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0 mt-0.5 border border-amber-500/30">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <h4 className="text-sm font-bold text-amber-300">
+                    Camera đang bị che hoặc bị tắt (Màn hình đen / biểu tượng camera gạch chéo)
+                  </h4>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 whitespace-nowrap">
+                    Cần tương tác phần cứng
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed mb-2.5">
+                  Trình duyệt đã cấp quyền nhưng không nhận được hình ảnh (hoặc camera đang bị khóa bởi công tắc vật lý / ứng dụng khác). Bạn hãy kiểm tra:
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-200 mb-3.5">
+                  <div className="p-2 rounded-lg bg-slate-800/80 border border-slate-700/80 flex items-start gap-2">
+                    <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-400 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">1</span>
+                    <span><b>Nắp gạt camera</b>: Gạt nút trượt vật lý trên viền màn hình để mở ống kính camera.</span>
+                  </div>
+                  <div className="p-2 rounded-lg bg-slate-800/80 border border-slate-700/80 flex items-start gap-2">
+                    <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-400 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">2</span>
+                    <span><b>Phím tắt bàn phím</b>: Bấm phím bật webcam (ví dụ <code className="text-amber-300">Fn + F10</code> hoặc phím có hình máy ảnh).</span>
+                  </div>
+                  <div className="p-2 rounded-lg bg-slate-800/80 border border-slate-700/80 flex items-start gap-2">
+                    <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-400 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">3</span>
+                    <span><b>Quyền riêng tư Windows</b>: Vào <i>Cài đặt Windows &gt; Quyền riêng tư &amp; bảo mật &gt; Máy ảnh</i> và bật ON.</span>
+                  </div>
+                  <div className="p-2 rounded-lg bg-slate-800/80 border border-slate-700/80 flex items-start gap-2">
+                    <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-400 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">4</span>
+                    <span><b>Tắt app đang chiếm camera</b>: Đóng Zalo, Zoom, Google Meet hoặc Teams đang chạy nền.</span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {onUseSampleImage && (
+                    <button
+                      id="btn-switch-sample-instant"
+                      onClick={onUseSampleImage}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition flex items-center gap-1.5"
+                    >
+                      <Sparkles className="w-4 h-4" /> Dùng Ảnh Mẫu để thử AI ngay lập tức
+                    </button>
+                  )}
+                  {availableDevices.length > 1 && (
+                    <button
+                      onClick={toggleFacingMode}
+                      className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition flex items-center gap-1.5"
+                    >
+                      <SwitchCamera className="w-4 h-4" /> Thử Camera khác ({availableDevices.length} thiết bị)
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setIsTrackMuted(false);
+                      setIsFramePitchBlack(false);
+                      handleVideoLoaded();
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition flex items-center gap-1.5"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" /> Đã mở nắp / Thử lại
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -428,11 +572,27 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
               </button>
             )}
 
+            {activeSource === "webcam" && availableDevices.length > 1 && (
+              <select
+                value={selectedDeviceId}
+                onChange={(e) => setSelectedDeviceId(e.target.value)}
+                title="Chọn thiết bị camera"
+                className="px-2 py-1 rounded-lg bg-slate-900/80 hover:bg-slate-800 text-slate-200 border border-slate-700/60 text-xs transition backdrop-blur-md shadow cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[120px] truncate"
+              >
+                <option value="">Camera mặc định</option>
+                {availableDevices.map((dev, idx) => (
+                  <option key={dev.deviceId || idx} value={dev.deviceId}>
+                    {dev.label || `Camera ${idx + 1}`}
+                  </option>
+                ))}
+              </select>
+            )}
+
             {activeSource === "webcam" && (
               <button
                 id="btn-switch-camera"
                 onClick={toggleFacingMode}
-                title="Đổi camera trước/sau"
+                title="Đổi camera trước/sau hoặc thiết bị"
                 className="p-2 rounded-lg bg-slate-900/80 hover:bg-slate-800 text-slate-200 border border-slate-700/60 transition backdrop-blur-md shadow"
               >
                 <SwitchCamera className="w-4 h-4" />
@@ -467,3 +627,4 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
     );
   }
 );
+
