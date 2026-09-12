@@ -6,12 +6,46 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+function findGeminiKey(): { key: string; foundKeyName: string } {
+  const names = [
+    "GEMINI_API_KEY",
+    "GEMINI_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_GEMINI_API_KEY",
+    "VITE_GEMINI_API_KEY",
+    "GEMINI_APIKEY",
+  ];
+
+  for (const name of names) {
+    const val = process.env[name];
+    if (val && typeof val === "string" && val.trim().length > 0) {
+      return { key: val.trim().replace(/^["']|["']$/g, ""), foundKeyName: name };
+    }
+  }
+
+  for (const [k, v] of Object.entries(process.env)) {
+    const cleanKey = k.trim().toUpperCase();
+    if (cleanKey.includes("GEMINI") && (cleanKey.includes("KEY") || cleanKey.includes("API"))) {
+      if (v && typeof v === "string" && v.trim().length > 0) {
+        return { key: v.trim().replace(/^["']|["']$/g, ""), foundKeyName: k };
+      }
+    }
+  }
+
+  return { key: "", foundKeyName: "" };
+}
+
 let aiClient: GoogleGenAI | null = null;
+let currentKeyUsed: string | null = null;
 function getAi(): GoogleGenAI {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
+  const { key } = findGeminiKey();
+  if (!key) {
+    throw new Error("Chưa cấu hình GEMINI_API_KEY.");
+  }
+  if (!aiClient || currentKeyUsed !== key) {
+    currentKeyUsed = key;
     aiClient = new GoogleGenAI({
-      apiKey: apiKey,
+      apiKey: key,
       httpOptions: {
         headers: {
           "User-Agent": "aistudio-build",
@@ -31,9 +65,11 @@ async function startServer() {
 
   // Health check endpoint
   app.get("/api/health", (req, res) => {
+    const { key, foundKeyName } = findGeminiKey();
     res.json({
       status: "ok",
-      hasKey: Boolean(process.env.GEMINI_API_KEY),
+      hasKey: Boolean(key && key.length > 0),
+      foundKeyName: foundKeyName || null,
       timestamp: Date.now(),
     });
   });
@@ -69,10 +105,10 @@ async function startServer() {
         return res.status(400).json({ error: "Vui lòng cung cấp dữ liệu hình ảnh (base64)." });
       }
 
-      const apiKey = process.env.GEMINI_API_KEY;
+      const { key: apiKey } = findGeminiKey();
       if (!apiKey) {
         return res.status(500).json({
-          error: "Chưa cấu hình GEMINI_API_KEY trong hệ thống. Vui lòng kiểm tra mục Settings > Secrets.",
+          error: "Chưa cấu hình GEMINI_API_KEY. Vui lòng cấu hình biến GEMINI_API_KEY: Trong AI Studio chọn Settings > Secrets; hoặc trong Vercel chọn Project Settings > Environment Variables.",
         });
       }
 

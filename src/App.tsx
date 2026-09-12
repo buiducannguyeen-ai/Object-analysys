@@ -170,7 +170,9 @@ export default function App() {
         } else if (msg.includes("503") || msg.includes("high demand") || msg.includes("UNAVAILABLE")) {
           msg = "Máy chủ AI đang có lượng yêu cầu lớn, hệ thống đang tự động cân bằng và thử lại...";
         } else if (msg.includes("GEMINI_API_KEY")) {
-          msg = "Chưa tìm thấy GEMINI_API_KEY. Vui lòng kiểm tra mục Settings > Secrets.";
+          if (!msg.includes("Vercel")) {
+            msg = "Chưa tìm thấy GEMINI_API_KEY. Vui lòng cấu hình biến GEMINI_API_KEY: Trong AI Studio chọn Settings > Secrets; hoặc trong Vercel chọn Project Settings > Environment Variables.";
+          }
         } else if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
           msg = "Đường truyền Wifi/Internet gián đoạn. Vui lòng kiểm tra kết nối mạng.";
         }
@@ -282,17 +284,26 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-col gap-5">
         {/* Error notification banner if any */}
         {errorMessage && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between text-xs text-rose-800 animate-in fade-in">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
-              <span>{errorMessage}</span>
+          <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl shadow-sm text-rose-900 animate-in fade-in">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-xs sm:text-sm font-semibold text-rose-900">
+                    {errorMessage.includes("GEMINI_API_KEY") ? "Chưa nhận diện được khóa GEMINI_API_KEY" : "Thông báo kết nối"}
+                  </div>
+                  <div className="text-xs text-rose-700 mt-1 leading-relaxed">
+                    {errorMessage}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => performDetection()}
+                className="px-3 py-1.5 bg-white border border-rose-300 rounded-xl hover:bg-rose-100 font-semibold text-xs text-rose-800 transition flex items-center gap-1.5 shrink-0 shadow-sm"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Thử lại
+              </button>
             </div>
-            <button
-              onClick={() => performDetection()}
-              className="px-2.5 py-1 bg-white border border-rose-300 rounded-lg hover:bg-rose-100 font-medium flex items-center gap-1"
-            >
-              <RefreshCw className="w-3 h-3" /> Thử lại
-            </button>
           </div>
         )}
 

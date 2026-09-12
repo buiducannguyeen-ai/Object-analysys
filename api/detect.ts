@@ -1,12 +1,43 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-let aiInstance: GoogleGenAI | null = null;
-function getAi(): GoogleGenAI {
-  if (!aiInstance) {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
-      throw new Error("GEMINI_API_KEY environment variable is required");
+function findGeminiKey(): string {
+  const names = [
+    "GEMINI_API_KEY",
+    "GEMINI_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_GEMINI_API_KEY",
+    "VITE_GEMINI_API_KEY",
+    "GEMINI_APIKEY",
+  ];
+
+  for (const name of names) {
+    const val = process.env[name];
+    if (val && typeof val === "string" && val.trim().length > 0) {
+      return val.trim().replace(/^["']|["']$/g, "");
     }
+  }
+
+  for (const [k, v] of Object.entries(process.env)) {
+    const cleanKey = k.trim().toUpperCase();
+    if (cleanKey.includes("GEMINI") && (cleanKey.includes("KEY") || cleanKey.includes("API"))) {
+      if (v && typeof v === "string" && v.trim().length > 0) {
+        return v.trim().replace(/^["']|["']$/g, "");
+      }
+    }
+  }
+
+  return "";
+}
+
+let aiInstance: GoogleGenAI | null = null;
+let currentKey: string | null = null;
+function getAi(): GoogleGenAI {
+  const key = findGeminiKey();
+  if (!key) {
+    throw new Error("GEMINI_API_KEY environment variable is required");
+  }
+  if (!aiInstance || currentKey !== key) {
+    currentKey = key;
     aiInstance = new GoogleGenAI({ apiKey: key });
   }
   return aiInstance;
@@ -38,10 +69,10 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: "Vui lòng cung cấp dữ liệu hình ảnh (base64)." });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = findGeminiKey();
     if (!apiKey) {
       return res.status(500).json({
-        error: "Chưa cấu hình GEMINI_API_KEY. Vui lòng cấu hình biến môi trường GEMINI_API_KEY trong Vercel Settings > Environment Variables.",
+        error: "Chưa cấu hình GEMINI_API_KEY. Vui lòng cấu hình biến GEMINI_API_KEY: Trong AI Studio chọn Settings > Secrets; hoặc trong Vercel chọn Project Settings > Environment Variables.",
       });
     }
 
