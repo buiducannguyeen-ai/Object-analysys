@@ -1,6 +1,6 @@
 {
-  "name": "Nhận Diện Đồ Vật Webcam AI",
-  "description": "Ứng dụng nhận diện đồ vật qua webcam và video theo thời gian thực sử dụng trí tuệ nhân tạo Gemini Vision.",
+  "name": "Nhận Diện Đồ Vật AI",
+  "description": "Ứng dụng nhận diện đồ vật thời gian thực qua webcam chạy trực tiếp trên trình duyệt bằng TensorFlow.js (COCO-SSD), hoàn toàn miễn phí và không cần API key.",
   "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

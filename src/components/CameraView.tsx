@@ -14,11 +14,14 @@ import {
   Radio,
   ExternalLink,
   RefreshCw,
+  ShieldAlert,
+  Lock,
 } from "lucide-react";
 import { DetectedObject } from "../types";
 
 export interface CameraViewHandle {
   captureFrame: () => string | null;
+  getSourceElement: () => HTMLVideoElement | HTMLImageElement | null;
 }
 
 interface CameraViewProps {
@@ -73,6 +76,7 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [stream, setStream] = useState<MediaStream | null>(null);
     const [cameraError, setCameraError] = useState<string | null>(null);
+    const [retryNonce, setRetryNonce] = useState(0);
     const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
     const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
     const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
@@ -181,12 +185,25 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
             handleVideoLoaded();
           }
         } catch (err: any) {
-          console.error("Camera access error:", err);
+          const errName = err?.name || "";
+          const errMsg = String(err?.message || err || "");
+          const isPermissionDenied =
+            errName === "NotAllowedError" ||
+            errName === "PermissionDeniedError" ||
+            errMsg.toLowerCase().includes("permission denied") ||
+            errMsg.toLowerCase().includes("not allowed");
+
+          if (isPermissionDenied) {
+            console.warn("Camera permission denied by user or iframe policy:", errMsg);
+          } else {
+            console.warn("Camera access warning:", err);
+          }
+
           if (mounted) {
             setCameraError(
-              err.name === "NotAllowedError" || err.name === "PermissionDeniedError"
-                ? "Quyền truy cập webcam bị từ chối hoặc bị hạn chế trong trình duyệt. Bạn có thể thử mở ứng dụng trong Tab Mới hoặc dùng chế độ Ảnh Mẫu bên dưới."
-                : `Không thể kích hoạt webcam: ${err.message || "Thiết bị chưa sẵn sàng"}`
+              isPermissionDenied
+                ? "permission_denied"
+                : `Không thể kích hoạt webcam: ${errMsg || "Thiết bị chưa sẵn sàng"}`
             );
           }
         }
@@ -198,7 +215,37 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
         mounted = false;
         stopWebcam();
       };
-    }, [activeSource, facingMode, selectedDeviceId]);
+    }, [activeSource, facingMode, selectedDeviceId, retryNonce]);
+
+    const handleRetryCamera = async () => {
+      setCameraError(null);
+      setIsTrackMuted(false);
+      setIsFramePitchBlack(false);
+      try {
+        // Direct call in user click handler satisfies browser user-gesture requirement
+        const temp = await navigator.mediaDevices.getUserMedia({
+          video: selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : true,
+          audio: false,
+        });
+        temp.getTracks().forEach((t) => t.stop());
+        setRetryNonce((n) => n + 1);
+      } catch (err: any) {
+        const errName = err?.name || "";
+        const errMsg = String(err?.message || err || "");
+        const isPermissionDenied =
+          errName === "NotAllowedError" ||
+          errName === "PermissionDeniedError" ||
+          errMsg.toLowerCase().includes("permission denied") ||
+          errMsg.toLowerCase().includes("not allowed");
+
+        if (isPermissionDenied) {
+          console.warn("Camera permission still denied on user retry:", errMsg);
+          setCameraError("permission_denied");
+        } else {
+          setCameraError(`Không thể kích hoạt webcam: ${errMsg || "Thiết bị chưa sẵn sàng"}`);
+        }
+      }
+    };
 
     const stopWebcam = () => {
       if (stream) {
@@ -298,6 +345,12 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
           return null;
         }
       },
+      getSourceElement: () => {
+        if (activeSource === "webcam") {
+          return videoRef.current;
+        }
+        return (document.getElementById("active-source-img") as HTMLImageElement) || null;
+      },
     }));
 
     const showCameraBlockedNotice = activeSource === "webcam" && (isTrackMuted || isFramePitchBlack);
@@ -345,47 +398,108 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
 
         {/* Camera Error Message */}
         {activeSource === "webcam" && cameraError && (
-          <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-6 text-center z-20">
-            <div className="w-14 h-14 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mb-3 border border-rose-500/20">
-              <CameraOff className="w-7 h-7" />
-            </div>
-            <h3 className="text-base font-semibold text-white mb-1.5">Chưa thể kết nối Webcam</h3>
-            <p className="text-xs text-slate-300 max-w-md mb-5 leading-relaxed">
-              {cameraError}
-            </p>
-            <div className="flex flex-wrap items-center justify-center gap-2.5">
-              <button
-                id="btn-retry-camera"
-                onClick={() => {
-                  setCameraError(null);
-                  setSelectedDeviceId("");
-                  setFacingMode((m) => (m === "user" ? "environment" : "user"));
-                }}
-                className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-xl transition shadow flex items-center gap-1.5"
-              >
-                <SwitchCamera className="w-4 h-4" /> Thử lại Webcam
-              </button>
+          <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-20 overflow-y-auto">
+            {cameraError === "permission_denied" ? (
+              <div className="max-w-md w-full flex flex-col items-center animate-in fade-in zoom-in-95 duration-200">
+                <div className="w-14 h-14 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mb-3.5 border border-amber-500/30">
+                  <ShieldAlert className="w-7 h-7" />
+                </div>
+                <h3 className="text-base font-bold text-white mb-1.5">
+                  Quyền Camera Đang Bị Chặn (Permission Denied)
+                </h3>
+                <p className="text-xs text-slate-300 mb-4 leading-relaxed">
+                  Trình duyệt hoặc khung xem trước (iframe) chưa được cấp quyền mở máy ảnh. Bạn có thể chọn cách xử lý nhanh:
+                </p>
 
-              <a
-                id="btn-open-in-new-tab"
-                href={typeof window !== "undefined" ? window.location.href : "#"}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl transition border border-slate-700 flex items-center gap-1.5"
-              >
-                <ExternalLink className="w-4 h-4" /> Mở trong Tab Mới
-              </a>
+                <div className="w-full text-left space-y-2 mb-5 text-xs">
+                  <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex items-start gap-2.5">
+                    <span className="w-5 h-5 rounded-lg bg-blue-500/20 text-blue-400 font-bold flex items-center justify-center shrink-0 text-[11px] mt-0.5">
+                      1
+                    </span>
+                    <div className="text-slate-300 leading-relaxed">
+                      <b className="text-white">Mở trong Tab Mới:</b> Khung xem trước trong AI Studio có thể bị hạn chế sandbox WebRTC. Mở tab mới sẽ hiện hộp thoại xin quyền máy ảnh trực tiếp.
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex items-start gap-2.5">
+                    <span className="w-5 h-5 rounded-lg bg-amber-500/20 text-amber-400 font-bold flex items-center justify-center shrink-0 text-[11px] mt-0.5">
+                      2
+                    </span>
+                    <div className="text-slate-300 leading-relaxed">
+                      <b className="text-white">Cấp quyền trên thanh địa chỉ:</b> Nhấp biểu tượng <Lock className="w-3.5 h-3.5 inline text-amber-400 mx-0.5" /> ổ khóa/máy ảnh cạnh tên miền ở thanh URL &gt; chuyển Camera sang <b>Cho phép (Allow)</b>.
+                    </div>
+                  </div>
+                </div>
 
-              {onUseSampleImage && (
-                <button
-                  id="btn-use-sample-fallback"
-                  onClick={onUseSampleImage}
-                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-xl transition shadow flex items-center gap-1.5"
-                >
-                  <Sparkles className="w-4 h-4" /> Dùng Ảnh Mẫu Thử Nghiệm
-                </button>
-              )}
-            </div>
+                <div className="flex flex-wrap items-center justify-center gap-2.5 w-full">
+                  <a
+                    id="btn-open-in-new-tab"
+                    href={typeof window !== "undefined" ? window.location.href : "#"}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl transition shadow flex items-center gap-1.5"
+                  >
+                    <ExternalLink className="w-4 h-4" /> Mở trong Tab Mới
+                  </a>
+
+                  <button
+                    id="btn-retry-camera"
+                    onClick={handleRetryCamera}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl transition border border-slate-700 flex items-center gap-1.5"
+                  >
+                    <RefreshCw className="w-4 h-4" /> Yêu cầu cấp quyền lại
+                  </button>
+
+                  {onUseSampleImage && (
+                    <button
+                      id="btn-use-sample-fallback"
+                      onClick={onUseSampleImage}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl transition shadow flex items-center gap-1.5"
+                    >
+                      <Sparkles className="w-4 h-4" /> Dùng Ảnh Mẫu ngay
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="max-w-md w-full flex flex-col items-center">
+                <div className="w-14 h-14 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mb-3 border border-rose-500/20">
+                  <CameraOff className="w-7 h-7" />
+                </div>
+                <h3 className="text-base font-semibold text-white mb-1.5">Chưa thể kết nối Webcam</h3>
+                <p className="text-xs text-slate-300 max-w-md mb-5 leading-relaxed">
+                  {cameraError}
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-2.5">
+                  <button
+                    id="btn-retry-camera"
+                    onClick={handleRetryCamera}
+                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-xl transition shadow flex items-center gap-1.5"
+                  >
+                    <SwitchCamera className="w-4 h-4" /> Thử lại Webcam
+                  </button>
+
+                  <a
+                    id="btn-open-in-new-tab"
+                    href={typeof window !== "undefined" ? window.location.href : "#"}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl transition border border-slate-700 flex items-center gap-1.5"
+                  >
+                    <ExternalLink className="w-4 h-4" /> Mở trong Tab Mới
+                  </a>
+
+                  {onUseSampleImage && (
+                    <button
+                      id="btn-use-sample-fallback"
+                      onClick={onUseSampleImage}
+                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-xl transition shadow flex items-center gap-1.5"
+                    >
+                      <Sparkles className="w-4 h-4" /> Dùng Ảnh Mẫu Thử Nghiệm
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

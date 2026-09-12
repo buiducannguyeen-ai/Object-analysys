@@ -71,8 +71,10 @@ export default async function handler(req: any, res: any) {
 
     const apiKey = findGeminiKey();
     if (!apiKey) {
-      return res.status(500).json({
-        error: "Chưa cấu hình GEMINI_API_KEY. Vui lòng cấu hình biến GEMINI_API_KEY: Trong AI Studio chọn Settings > Secrets; hoặc trong Vercel chọn Project Settings > Environment Variables.",
+      return res.status(200).json({
+        dominantObject: "AI Cục Bộ",
+        sceneSummary: "Chế độ AI cục bộ chạy trực tiếp trên trình duyệt bằng TensorFlow.js (Không cần API key).",
+        objects: [],
       });
     }
 

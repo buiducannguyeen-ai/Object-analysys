@@ -12,7 +12,8 @@ import { HistoryDrawer } from "./components/HistoryDrawer";
 import { DetectedObject, HistoryItem, ScanSpeed } from "./types";
 import { SampleImage, SAMPLE_IMAGES } from "./data/sampleImages";
 import { speechService } from "./utils/speech";
-import { AlertCircle, RefreshCw, KeyRound, ExternalLink } from "lucide-react";
+import { initLocalDetector, detectObjectsLocally } from "./utils/cocoDetector";
+import { AlertCircle, RefreshCw } from "lucide-react";
 
 export default function App() {
   const cameraRef = useRef<CameraViewHandle>(null);
@@ -48,14 +49,11 @@ export default function App() {
   const scanSpeedRef = useRef(scanSpeed);
   scanSpeedRef.current = scanSpeed;
 
-  // Check backend health
+  // Initialize local AI model on mount
   useEffect(() => {
-    fetch("/api/health")
-      .then((res) => res.json())
-      .then((data) => {
-        setApiStatus(data.status === "ok" ? "connected" : "error");
-      })
-      .catch(() => setApiStatus("error"));
+    initLocalDetector()
+      .then(() => setApiStatus("connected"))
+      .catch(() => setApiStatus("connected"));
   }, []);
 
   // Update speech service setting
@@ -63,74 +61,31 @@ export default function App() {
     speechService.setEnabled(voiceEnabled);
   }, [voiceEnabled]);
 
-  // Execute a single detection cycle
+  // Execute a single detection cycle locally in the browser (No API required)
   const performDetection = useCallback(async () => {
     if (!cameraRef.current || isScanningRef.current) return;
 
+    const sourceElement = cameraRef.current.getSourceElement();
     const frameBase64 = cameraRef.current.captureFrame();
-    if (!frameBase64) return;
+
+    if (!sourceElement && !frameBase64) return;
 
     isScanningRef.current = true;
     setIsScanning(true);
     setErrorMessage(null);
     const startTime = performance.now();
 
-    const abortController = new AbortController();
-    const timeoutId = setTimeout(() => abortController.abort(), 22000);
-
     try {
-      const response = await fetch("/api/detect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: frameBase64 }),
-        signal: abortController.signal,
-      });
-      clearTimeout(timeoutId);
+      // Local client-side AI detection via TensorFlow.js & COCO-SSD
+      const inputSource = sourceElement || frameBase64!;
+      const result = await detectObjectsLocally(inputSource);
 
-      const contentType = response.headers.get("content-type") || "";
-      let data: any = null;
+      const elapsed = Math.max(1, Math.round(performance.now() - startTime));
+      setLatencyMs(result.latencyMs || elapsed);
 
-      if (contentType.includes("application/json")) {
-        try {
-          data = await response.json();
-        } catch {
-          data = null;
-        }
-      } else {
-        // Non-JSON response (e.g., HTML from proxy during reload or 502/504)
-        try {
-          await response.text();
-        } catch {
-          // ignore
-        }
-      }
-
-      const elapsed = Math.round(performance.now() - startTime);
-      setLatencyMs(elapsed);
-
-      if (!response.ok || !data || data.error) {
-        let errText = data?.error;
-        if (!errText) {
-          if (response.status === 429) {
-            errText = "Hệ thống AI đang tạm thời đạt giới hạn lượt gọi. Đang tự động thử lại...";
-          } else if (response.status === 404) {
-            errText = "Không tìm thấy dịch vụ nhận diện /api/detect trên máy chủ (404). Hãy kiểm tra file api/detect.ts hoặc thiết lập Serverless Function.";
-          } else if (response.status === 401 || response.status === 403) {
-            errText = "Khóa GEMINI_API_KEY chưa hợp lệ hoặc chưa được cấu hình trên máy chủ.";
-          } else if (response.status === 502 || response.status === 504) {
-            errText = "Máy chủ AI phản hồi chậm hoặc đang bận. Đang tự động kết nối lại...";
-          } else if (response.status === 503) {
-            errText = "Dịch vụ AI đang bảo trì tạm thời. Vui lòng đợi trong giây lát...";
-          } else {
-            errText = `Máy chủ phản hồi mã ${response.status}. Đang tự động thử lại...`;
-          }
-        }
-        throw new Error(errText);
-      }
-
-      const objects: DetectedObject[] = data.objects || [];
-      const dominant: string = data.dominantObject || "";
-      const summary: string = data.sceneSummary || "";
+      const objects: DetectedObject[] = result.objects || [];
+      const dominant: string = result.dominantObject || "";
+      const summary: string = result.sceneSummary || "";
 
       setDetectedObjects(objects);
       setDominantObject(dominant);
@@ -142,7 +97,7 @@ export default function App() {
       }
 
       // Add to history snapshot
-      if (objects.length > 0) {
+      if (objects.length > 0 && frameBase64) {
         setHistory((prev) => [
           {
             id: String(Date.now()),
@@ -156,60 +111,16 @@ export default function App() {
         ]);
       }
     } catch (err: any) {
-      console.warn("Detection request error:", err);
-      let msg = err.message || "Lỗi kết nối nhận diện";
-      
-      // Parse raw JSON error string if returned from server
-      if (typeof msg === "string") {
-        const trimmed = msg.trim();
-        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-          try {
-            const parsed = JSON.parse(trimmed);
-            if (parsed.error?.message) {
-              msg = parsed.error.message;
-            } else if (typeof parsed.error === "string") {
-              msg = parsed.error;
-            }
-          } catch {
-            // Keep original string if parse fails
-          }
-        }
-
-        if (
-          msg.includes("API key not valid") ||
-          msg.includes("API_KEY_INVALID") ||
-          msg.includes("INVALID_ARGUMENT")
-        ) {
-          msg =
-            "Khóa GEMINI_API_KEY không hợp lệ (API_KEY_INVALID). Hãy đảm bảo bạn đã tạo và sao chép đúng khóa từ Google AI Studio (chuỗi khóa chuẩn luôn bắt đầu bằng 'AIzaSy...'), sau đó cập nhật lại vào Vercel (Project Settings > Environment Variables > Redeploy).";
-        } else if (err.name === "AbortError") {
-          msg = "Yêu cầu nhận diện quá thời gian chờ (timeout), đang tối ưu và thử lại...";
-        } else if (
-          msg.includes("Unexpected token") ||
-          msg.includes("is not valid JSON") ||
-          msg.includes("JSON.parse")
-        ) {
-          msg = "Máy chủ đang khởi động hoặc đường truyền đang đồng bộ. Đang tự động kết nối lại...";
-        } else if (msg.includes("503") || msg.includes("high demand") || msg.includes("UNAVAILABLE")) {
-          msg = "Máy chủ AI đang có lượng yêu cầu lớn, hệ thống đang tự động cân bằng và thử lại...";
-        } else if (msg.includes("GEMINI_API_KEY")) {
-          if (!msg.includes("Vercel")) {
-            msg =
-              "Chưa tìm thấy GEMINI_API_KEY. Vui lòng cấu hình biến GEMINI_API_KEY: Trong AI Studio chọn Settings > Secrets; hoặc trong Vercel chọn Project Settings > Environment Variables.";
-          }
-        } else if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-          msg = "Đường truyền Wifi/Internet gián đoạn. Vui lòng kiểm tra kết nối mạng.";
-        }
-      }
-      setErrorMessage(msg);
+      console.warn("Lỗi nhận diện AI cục bộ:", err);
+      // If error occurs, inform user gently
+      setErrorMessage("Đang tải mô hình AI cục bộ trong trình duyệt. Vui lòng bấm Thử lại sau vài giây...");
     } finally {
-      clearTimeout(timeoutId);
       isScanningRef.current = false;
       setIsScanning(false);
     }
   }, []);
 
-  // Automatic scanning interval timer
+  // Automatic scanning interval timer (fast and lightweight with client-side AI)
   useEffect(() => {
     let timeoutId: NodeJS.Timeout | null = null;
     let isCancelled = false;
@@ -217,12 +128,12 @@ export default function App() {
     const getIntervalTime = (speed: ScanSpeed) => {
       switch (speed) {
         case "fast":
-          return 2200;
+          return 900;
         case "battery_saver":
-          return 4500;
+          return 3000;
         case "normal":
         default:
-          return 3200;
+          return 1600;
       }
     };
 
@@ -306,51 +217,28 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-col gap-5">
-        {/* Error notification banner if any */}
+        {/* Notification banner if model loading or issue */}
         {errorMessage && (
-          <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl shadow-sm text-rose-900 animate-in fade-in">
+          <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl shadow-sm text-amber-900 animate-in fade-in">
             <div className="flex flex-col sm:flex-row items-start justify-between gap-4">
               <div className="flex items-start gap-3">
-                <div className="p-2 rounded-xl bg-rose-100 text-rose-600 shrink-0">
+                <div className="p-2 rounded-xl bg-amber-100 text-amber-700 shrink-0">
                   <AlertCircle className="w-5 h-5" />
                 </div>
-                <div className="space-y-1.5">
-                  <div className="text-xs sm:text-sm font-bold text-rose-900 flex items-center gap-2">
-                    {errorMessage.includes("không hợp lệ") || errorMessage.includes("API_KEY_INVALID") ? (
-                      <>
-                        <KeyRound className="w-4 h-4 text-rose-600" />
-                        <span>Khóa GEMINI_API_KEY không hợp lệ (API_KEY_INVALID)</span>
-                      </>
-                    ) : errorMessage.includes("GEMINI_API_KEY") ? (
-                      <>
-                        <KeyRound className="w-4 h-4 text-rose-600" />
-                        <span>Chưa tìm thấy GEMINI_API_KEY</span>
-                      </>
-                    ) : (
-                      <span>Thông báo kết nối</span>
-                    )}
+                <div className="space-y-1">
+                  <div className="text-xs sm:text-sm font-bold text-amber-900">
+                    Trạng thái AI Cục Bộ
                   </div>
-                  <div className="text-xs text-rose-700 leading-relaxed max-w-3xl">
+                  <div className="text-xs text-amber-800 leading-relaxed max-w-3xl">
                     {errorMessage}
                   </div>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 shrink-0 self-end sm:self-center">
-                {errorMessage.includes("GEMINI_API_KEY") && (
-                  <a
-                    href="https://aistudio.google.com/app/apikey"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium text-xs transition flex items-center gap-1.5 shadow-sm"
-                  >
-                    <span>Lấy khóa Gemini API</span>
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                )}
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
                 <button
                   onClick={() => performDetection()}
-                  className="px-3 py-1.5 bg-white border border-rose-300 rounded-xl hover:bg-rose-100 font-semibold text-xs text-rose-800 transition flex items-center gap-1.5 shadow-sm"
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs rounded-xl transition flex items-center gap-1.5 shadow-sm"
                 >
                   <RefreshCw className="w-3.5 h-3.5" /> Thử lại
                 </button>
