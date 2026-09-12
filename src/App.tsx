@@ -12,7 +12,7 @@ import { HistoryDrawer } from "./components/HistoryDrawer";
 import { DetectedObject, HistoryItem, ScanSpeed } from "./types";
 import { SampleImage, SAMPLE_IMAGES } from "./data/sampleImages";
 import { speechService } from "./utils/speech";
-import { AlertCircle, RefreshCw } from "lucide-react";
+import { AlertCircle, RefreshCw, KeyRound, ExternalLink } from "lucide-react";
 
 export default function App() {
   const cameraRef = useRef<CameraViewHandle>(null);
@@ -158,10 +158,33 @@ export default function App() {
     } catch (err: any) {
       console.warn("Detection request error:", err);
       let msg = err.message || "Lỗi kết nối nhận diện";
-      if (err.name === "AbortError") {
-        msg = "Yêu cầu nhận diện quá thời gian chờ (timeout), đang tối ưu và thử lại...";
-      } else if (typeof msg === "string") {
+      
+      // Parse raw JSON error string if returned from server
+      if (typeof msg === "string") {
+        const trimmed = msg.trim();
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed.error?.message) {
+              msg = parsed.error.message;
+            } else if (typeof parsed.error === "string") {
+              msg = parsed.error;
+            }
+          } catch {
+            // Keep original string if parse fails
+          }
+        }
+
         if (
+          msg.includes("API key not valid") ||
+          msg.includes("API_KEY_INVALID") ||
+          msg.includes("INVALID_ARGUMENT")
+        ) {
+          msg =
+            "Khóa GEMINI_API_KEY không hợp lệ (API_KEY_INVALID). Hãy đảm bảo bạn đã tạo và sao chép đúng khóa từ Google AI Studio (chuỗi khóa chuẩn luôn bắt đầu bằng 'AIzaSy...'), sau đó cập nhật lại vào Vercel (Project Settings > Environment Variables > Redeploy).";
+        } else if (err.name === "AbortError") {
+          msg = "Yêu cầu nhận diện quá thời gian chờ (timeout), đang tối ưu và thử lại...";
+        } else if (
           msg.includes("Unexpected token") ||
           msg.includes("is not valid JSON") ||
           msg.includes("JSON.parse")
@@ -171,7 +194,8 @@ export default function App() {
           msg = "Máy chủ AI đang có lượng yêu cầu lớn, hệ thống đang tự động cân bằng và thử lại...";
         } else if (msg.includes("GEMINI_API_KEY")) {
           if (!msg.includes("Vercel")) {
-            msg = "Chưa tìm thấy GEMINI_API_KEY. Vui lòng cấu hình biến GEMINI_API_KEY: Trong AI Studio chọn Settings > Secrets; hoặc trong Vercel chọn Project Settings > Environment Variables.";
+            msg =
+              "Chưa tìm thấy GEMINI_API_KEY. Vui lòng cấu hình biến GEMINI_API_KEY: Trong AI Studio chọn Settings > Secrets; hoặc trong Vercel chọn Project Settings > Environment Variables.";
           }
         } else if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
           msg = "Đường truyền Wifi/Internet gián đoạn. Vui lòng kiểm tra kết nối mạng.";
@@ -285,24 +309,52 @@ export default function App() {
         {/* Error notification banner if any */}
         {errorMessage && (
           <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl shadow-sm text-rose-900 animate-in fade-in">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-start gap-2.5">
-                <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
-                <div>
-                  <div className="text-xs sm:text-sm font-semibold text-rose-900">
-                    {errorMessage.includes("GEMINI_API_KEY") ? "Chưa nhận diện được khóa GEMINI_API_KEY" : "Thông báo kết nối"}
+            <div className="flex flex-col sm:flex-row items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-xl bg-rose-100 text-rose-600 shrink-0">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-xs sm:text-sm font-bold text-rose-900 flex items-center gap-2">
+                    {errorMessage.includes("không hợp lệ") || errorMessage.includes("API_KEY_INVALID") ? (
+                      <>
+                        <KeyRound className="w-4 h-4 text-rose-600" />
+                        <span>Khóa GEMINI_API_KEY không hợp lệ (API_KEY_INVALID)</span>
+                      </>
+                    ) : errorMessage.includes("GEMINI_API_KEY") ? (
+                      <>
+                        <KeyRound className="w-4 h-4 text-rose-600" />
+                        <span>Chưa tìm thấy GEMINI_API_KEY</span>
+                      </>
+                    ) : (
+                      <span>Thông báo kết nối</span>
+                    )}
                   </div>
-                  <div className="text-xs text-rose-700 mt-1 leading-relaxed">
+                  <div className="text-xs text-rose-700 leading-relaxed max-w-3xl">
                     {errorMessage}
                   </div>
                 </div>
               </div>
-              <button
-                onClick={() => performDetection()}
-                className="px-3 py-1.5 bg-white border border-rose-300 rounded-xl hover:bg-rose-100 font-semibold text-xs text-rose-800 transition flex items-center gap-1.5 shrink-0 shadow-sm"
-              >
-                <RefreshCw className="w-3.5 h-3.5" /> Thử lại
-              </button>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0 self-end sm:self-center">
+                {errorMessage.includes("GEMINI_API_KEY") && (
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium text-xs transition flex items-center gap-1.5 shadow-sm"
+                  >
+                    <span>Lấy khóa Gemini API</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+                <button
+                  onClick={() => performDetection()}
+                  className="px-3 py-1.5 bg-white border border-rose-300 rounded-xl hover:bg-rose-100 font-semibold text-xs text-rose-800 transition flex items-center gap-1.5 shadow-sm"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Thử lại
+                </button>
+              </div>
             </div>
           </div>
         )}

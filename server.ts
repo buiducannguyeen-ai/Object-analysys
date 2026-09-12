@@ -265,12 +265,25 @@ Yêu cầu:
       });
     } catch (err: any) {
       console.error("Lỗi nhận diện đồ vật:", err);
-      const isRateLimit = String(err).includes("429") || String(err).includes("RESOURCE_EXHAUSTED");
+      const errStr = String(err?.message || err);
+      const isInvalidKey =
+        errStr.includes("API_KEY_INVALID") ||
+        errStr.includes("API key not valid") ||
+        errStr.includes("INVALID_ARGUMENT");
+      const isRateLimit = errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED");
+
+      if (isInvalidKey) {
+        return res.status(401).json({
+          error: "Khóa GEMINI_API_KEY không hợp lệ (API_KEY_INVALID). Hãy đảm bảo bạn đã tạo đúng khóa từ Google AI Studio (bắt đầu bằng AIzaSy...) và cập nhật lại trong Vercel Environment Variables.",
+          details: errStr,
+        });
+      }
+
       return res.status(isRateLimit ? 429 : 500).json({
         error: isRateLimit
           ? "Hệ thống AI đang tạm thời đạt giới hạn tốc độ. Vui lòng đợi ít giây rồi thử lại."
           : (err.message || "Lỗi xử lý hình ảnh nhận diện đồ vật"),
-        details: String(err),
+        details: errStr,
       });
     }
   });
